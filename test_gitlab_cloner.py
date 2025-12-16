@@ -130,19 +130,49 @@ class TestGitLabCloner(unittest.TestCase):
     
     @patch('gitlab_cloner.Repo')
     def test_clone_repository_already_exists(self, mock_repo):
-        """Test cloning when repository already exists."""
+        """Test updating when repository already exists."""
         # Create existing directory
         mock_project = Mock()
         mock_project.name = "test-repo"
         existing_repo_path = Path(self.temp_dir) / "test-repo"
         existing_repo_path.mkdir()
         
-        local_path = Path(self.temp_dir)
-        result = self.cloner.clone_repository(mock_project, local_path)
+        # Mock the existing repo
+        mock_repo_instance = Mock()
+        mock_repo_instance.remotes.origin.refs = []
+        mock_repo_instance.remotes.origin.fetch = Mock()
+        mock_repo.return_value = mock_repo_instance
+        
+        # Mock pull_all_branches method
+        with patch.object(self.cloner, 'pull_all_branches', return_value=True):
+            local_path = Path(self.temp_dir)
+            result = self.cloner.clone_repository(mock_project, local_path)
         
         self.assertTrue(result)
-        self.assertEqual(self.cloner.stats['repositories_skipped'], 1)
+        self.assertEqual(self.cloner.stats['repositories_updated'], 1)
         mock_repo.clone_from.assert_not_called()
+    
+    def test_sanitize_name(self):
+        """Test name sanitization for filesystem compatibility."""
+        # Test trailing whitespace
+        self.assertEqual(self.cloner._sanitize_name('ViraceGdt '), 'ViraceGdt')
+        self.assertEqual(self.cloner._sanitize_name(' Project Name '), 'Project Name')
+        
+        # Test invalid Windows characters
+        self.assertEqual(self.cloner._sanitize_name('Project<Name>'), 'Project_Name_')
+        self.assertEqual(self.cloner._sanitize_name('Test:Name|File'), 'Test_Name_File')
+        
+        # Test trailing dots and spaces (Windows restriction)
+        self.assertEqual(self.cloner._sanitize_name('Project...'), 'Project')
+        self.assertEqual(self.cloner._sanitize_name('Name. '), 'Name')
+        
+        # Test empty/whitespace only
+        self.assertEqual(self.cloner._sanitize_name('   '), 'unnamed')
+        self.assertEqual(self.cloner._sanitize_name(''), 'unnamed')
+        
+        # Test normal names (should not change)
+        self.assertEqual(self.cloner._sanitize_name('ValidProjectName'), 'ValidProjectName')
+        self.assertEqual(self.cloner._sanitize_name('project-name_123'), 'project-name_123')
     
     def test_process_group_items(self):
         """Test processing group items (projects and subgroups)."""

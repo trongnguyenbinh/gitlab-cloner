@@ -45,7 +45,7 @@ class GitLabCloner:
         # Statistics
         self.stats = {
             'repositories_cloned': 0,
-            'repositories_skipped': 0,
+            'repositories_updated': 0,
             'groups_processed': 0,
             'errors': 0
         }
@@ -108,9 +108,94 @@ class GitLabCloner:
             self.logger.error(f"Failed to get group '{group_identifier}': {e}")
             return None
     
+    def pull_all_branches(self, repo: Repo, project: Any) -> bool:
+        """
+        Fetch all remote branches and pull the latest code for existing repository.
+        
+        Args:
+            repo: GitPython Repo object
+            project: GitLab project object
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Fetch all branches from remote
+            self.logger.info(f"Fetching all branches for {project.name}")
+            repo.remotes.origin.fetch(prune=True)
+            
+            # Get all remote branches
+            remote_branches = [ref.name for ref in repo.remotes.origin.refs if not ref.name.endswith('/HEAD')]
+            self.logger.info(f"Found {len(remote_branches)} remote branches")
+            
+            # Store current branch
+            current_branch = repo.active_branch.name if not repo.head.is_detached else None
+            
+            # Pull updates for each branch
+            for remote_ref in remote_branches:
+                try:
+                    # Extract branch name (remove 'origin/' prefix)
+                    branch_name = remote_ref.replace('origin/', '')
+                    
+                    # Check if local branch exists
+                    if branch_name in [b.name for b in repo.heads]:
+                        # Checkout and pull existing branch
+                        self.logger.info(f"Pulling updates for branch: {branch_name}")
+                        repo.git.checkout(branch_name)
+                        repo.remotes.origin.pull(branch_name)
+                    else:
+                        # Create new local branch tracking remote
+                        self.logger.info(f"Creating local branch: {branch_name}")
+                        repo.git.checkout('-b', branch_name, remote_ref)
+                        
+                except GitCommandError as e:
+                    self.logger.warning(f"Failed to pull branch {branch_name}: {e}")
+                    continue
+            
+            # Return to original branch if possible
+            if current_branch:
+                try:
+                    repo.git.checkout(current_branch)
+                    self.logger.info(f"Returned to original branch: {current_branch}")
+                except GitCommandError:
+                    self.logger.warning(f"Could not return to original branch: {current_branch}")
+            
+            self.logger.info(f"Successfully updated all branches for: {project.name}")
+            return True
+            
+        except GitCommandError as e:
+            self.logger.error(f"Git error pulling branches for {project.name}: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error pulling branches for {project.name}: {e}")
+            return False
+    
+    def _sanitize_name(self, name: str) -> str:
+        """
+        Sanitize project/group name for filesystem compatibility.
+        
+        Args:
+            name: Original name from GitLab
+            
+        Returns:
+            Sanitized name safe for filesystem use
+        """
+        # Strip leading/trailing whitespace
+        sanitized = name.strip()
+        
+        # Replace or remove characters that are problematic on Windows
+        invalid_chars = '<>:"|?*'
+        for char in invalid_chars:
+            sanitized = sanitized.replace(char, '_')
+        
+        # Remove trailing dots and spaces (Windows restriction)
+        sanitized = sanitized.rstrip('. ')
+        
+        return sanitized if sanitized else 'unnamed'
+    
     def clone_repository(self, project: Any, local_path: Path) -> bool:
         """
-        Clone a single repository.
+        Clone a single repository or pull updates if it already exists.
         
         Args:
             project: GitLab project object
@@ -119,13 +204,25 @@ class GitLabCloner:
         Returns:
             True if successful, False otherwise
         """
-        repo_path = local_path / project.name
+        # Sanitize the project name for filesystem compatibility
+        sanitized_name = self._sanitize_name(project.name)
+        repo_path = local_path / sanitized_name
         
-        # Skip if repository already exists
+        # If repository already exists, pull updates instead of skipping
         if repo_path.exists():
-            self.logger.info(f"Repository already exists, skipping: {repo_path}")
-            self.stats['repositories_skipped'] += 1
-            return True
+            self.logger.info(f"Repository already exists, pulling updates: {repo_path}")
+            try:
+                repo = Repo(repo_path)
+                if self.pull_all_branches(repo, project):
+                    self.stats['repositories_updated'] += 1
+                    return True
+                else:
+                    self.stats['errors'] += 1
+                    return False
+            except Exception as e:
+                self.logger.error(f"Error updating repository {project.name}: {e}")
+                self.stats['errors'] += 1
+                return False
         
         try:
             # Create parent directory if it doesn't exist
@@ -179,7 +276,9 @@ class GitLabCloner:
             
             # Process each subgroup
             for subgroup in subgroups:
-                subgroup_path = local_path / subgroup.name
+                # Sanitize subgroup name for filesystem compatibility
+                sanitized_subgroup_name = self._sanitize_name(subgroup.name)
+                subgroup_path = local_path / sanitized_subgroup_name
                 subgroup_path.mkdir(parents=True, exist_ok=True)
                 
                 # Get full subgroup object for recursive processing
@@ -243,7 +342,7 @@ class GitLabCloner:
         self.logger.info("=" * 50)
         self.logger.info(f"Groups processed: {self.stats['groups_processed']}")
         self.logger.info(f"Repositories cloned: {self.stats['repositories_cloned']}")
-        self.logger.info(f"Repositories skipped: {self.stats['repositories_skipped']}")
+        self.logger.info(f"Repositories updated: {self.stats['repositories_updated']}")
         self.logger.info(f"Errors encountered: {self.stats['errors']}")
         self.logger.info("=" * 50)
 

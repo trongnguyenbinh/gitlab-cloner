@@ -29,13 +29,15 @@ def example_basic_usage():
     # Create cloner instance
     cloner = GitLabCloner(gitlab_url, access_token, destination_path)
     
-    # Start cloning process
+    # Start cloning/updating process
+    # - New repositories will be cloned
+    # - Existing repositories will have all branches fetched and updated
     success = cloner.clone_group_recursively(group_identifier)
     
     if success:
-        print("Cloning completed successfully!")
+        print("Cloning/updating completed successfully!")
     else:
-        print("Cloning failed!")
+        print("Cloning/updating failed!")
     
     return success
 
@@ -171,14 +173,16 @@ def example_statistics_monitoring():
     print("\nFinal Statistics:")
     print(f"Groups processed: {stats['groups_processed']}")
     print(f"Repositories cloned: {stats['repositories_cloned']}")
-    print(f"Repositories skipped: {stats['repositories_skipped']}")
+    print(f"Repositories updated: {stats['repositories_updated']}")
     print(f"Errors encountered: {stats['errors']}")
     
     # Calculate success rate
-    total_repos = stats['repositories_cloned'] + stats['repositories_skipped']
+    total_repos = stats['repositories_cloned'] + stats['repositories_updated']
     if total_repos > 0:
         success_rate = (stats['repositories_cloned'] / total_repos) * 100
-        print(f"Success rate: {success_rate:.1f}%")
+        print(f"New repositories: {success_rate:.1f}%")
+        update_rate = (stats['repositories_updated'] / total_repos) * 100
+        print(f"Updated repositories: {update_rate:.1f}%")
     
     return success
 

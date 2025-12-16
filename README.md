@@ -9,7 +9,14 @@ A Python tool to recursively clone all Git repositories from a GitLab self-hoste
 - **Breadth-First Processing**: Uses a queue-based approach for efficient traversal
 - **Error Handling**: Robust error handling for API calls and git operations
 - **Progress Tracking**: Detailed logging and statistics reporting
-- **Skip Existing**: Automatically skips repositories that are already cloned locally
+- **Smart Repository Management**: 
+  - Clones new repositories that don't exist locally
+  - Automatically updates existing repositories by fetching and pulling all remote branches
+  - Creates local tracking branches for any new remote branches
+- **Filesystem-Safe Naming**: Automatically sanitizes repository and group names to handle:
+  - Trailing/leading whitespace
+  - Invalid Windows characters (`<>:"|?*`)
+  - Trailing dots and spaces (Windows restrictions)
 
 ## Installation
 
@@ -53,7 +60,13 @@ python gitlab_cloner.py --gitlab-url https://gitlab.company.com --token glpat-xx
 
 1. **Authentication**: Connects to the GitLab API using the provided access token
 2. **Initial Group Scan**: Scans the specified group to identify repositories and subgroups
-3. **Repository Cloning**: Clones repositories directly to the current directory level
+3. **Repository Management**:
+   - For new repositories: Clones them to the appropriate directory
+   - For existing repositories: 
+     - Fetches all remote branches
+     - Creates local tracking branches for new remote branches
+     - Pulls the latest changes for all branches
+     - Returns to the original branch after updating
 4. **Subgroup Processing**: Creates local directories for subgroups and queues them for processing
 5. **Recursive Processing**: Continues processing subgroups until all levels are complete
 
