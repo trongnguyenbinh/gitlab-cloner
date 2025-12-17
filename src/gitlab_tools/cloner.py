@@ -19,11 +19,13 @@ import gitlab
 from git import Repo, GitCommandError
 import click
 
+from .progress import ProgressManager, BranchProgressManager, ErrorRecord
+
 
 class GitLabCloner:
     """Main class for cloning GitLab repositories recursively."""
     
-    def __init__(self, gitlab_url: str, access_token: str, destination_path: str):
+    def __init__(self, gitlab_url: str, access_token: str, destination_path: str, quiet: bool = False):
         """
         Initialize the GitLab cloner.
         
@@ -31,16 +33,21 @@ class GitLabCloner:
             gitlab_url: Base URL of the GitLab instance
             access_token: GitLab API access token
             destination_path: Local path where repositories will be cloned
+            quiet: If True, suppress detailed logging and show progress bar only
         """
         self.gitlab_url = gitlab_url.rstrip('/')
         self.access_token = access_token
         self.destination_path = Path(destination_path).resolve()
+        self.quiet = quiet
         
         # Initialize GitLab connection
         self.gl = gitlab.Gitlab(self.gitlab_url, private_token=self.access_token)
         
         # Setup logging
         self.logger = self._setup_logging()
+        
+        # Progress manager (set later in clone_group_recursively)
+        self.progress_manager: Optional[ProgressManager] = None
         
         # Statistics
         self.stats = {
@@ -53,11 +60,14 @@ class GitLabCloner:
     def _setup_logging(self) -> logging.Logger:
         """Setup logging configuration."""
         logger = logging.getLogger('gitlab_cloner')
-        logger.setLevel(logging.INFO)
+        
+        # In quiet mode, only show WARNING and ERROR level logs
+        log_level = logging.WARNING if self.quiet else logging.INFO
+        logger.setLevel(log_level)
         
         # Create console handler
         handler = logging.StreamHandler()
-        handler.setLevel(logging.INFO)
+        handler.setLevel(log_level)
         
         # Create formatter
         formatter = logging.Formatter(
@@ -170,6 +180,85 @@ class GitLabCloner:
             self.logger.error(f"Error pulling branches for {project.name}: {e}")
             return False
     
+    def _fetch_all_remote_branches(self, repo: Repo, project: Any) -> bool:
+        """
+        Fetch all remote branches and create local tracking branches.
+        
+        Args:
+            repo: GitPython Repo object
+            project: GitLab project object (for logging)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Fetch all branches from remote
+            self.logger.info(f"Fetching all remote branches for {project.name}")
+            repo.remotes.origin.fetch(prune=True)
+            
+            # Get all remote branches
+            remote_branches = [ref.name for ref in repo.remotes.origin.refs if not ref.name.endswith('/HEAD')]
+            self.logger.info(f"Found {len(remote_branches)} remote branches")
+            
+            if not remote_branches:
+                self.logger.info(f"No remote branches found for {project.name}")
+                return True
+            
+            # Create local tracking branches for each remote branch
+            for remote_ref in remote_branches:
+                try:
+                    # Extract branch name (remove 'origin/' prefix)
+                    branch_name = remote_ref.replace('origin/', '')
+                    
+                    # Check if local branch already exists
+                    if branch_name in [b.name for b in repo.heads]:
+                        self.logger.debug(f"Local branch already exists: {branch_name}")
+                        continue
+                    
+                    # Create new local branch tracking remote
+                    self.logger.info(f"Creating local branch: {branch_name}")
+                    repo.git.checkout('-b', branch_name, remote_ref)
+                    
+                except GitCommandError as e:
+                    self.logger.warning(f"Failed to create branch {branch_name}: {e}")
+                    continue
+            
+            self.logger.info(f"Successfully fetched all branches for {project.name}")
+            return True
+            
+        except GitCommandError as e:
+            self.logger.error(f"Git error fetching branches for {project.name}: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error fetching branches for {project.name}: {e}")
+            return False
+    
+    def _count_total_repositories(self, group: Any) -> int:
+        """
+        Count total number of repositories in group and subgroups.
+        
+        Args:
+            group: GitLab group object
+            
+        Returns:
+            Total count of repositories
+        """
+        count = 0
+        try:
+            # Count projects in this group
+            projects = group.projects.list(all=True, include_subgroups=False)
+            count += len(projects)
+            
+            # Count projects in subgroups
+            subgroups = group.subgroups.list(all=True)
+            for subgroup in subgroups:
+                full_subgroup = self.gl.groups.get(subgroup.id)
+                count += self._count_total_repositories(full_subgroup)
+        except Exception as e:
+            self.logger.warning(f"Error counting repositories in group {group.name}: {e}")
+        
+        return count
+    
     def _sanitize_name(self, name: str) -> str:
         """
         Sanitize project/group name for filesystem compatibility.
@@ -228,22 +317,52 @@ class GitLabCloner:
             # Create parent directory if it doesn't exist
             local_path.mkdir(parents=True, exist_ok=True)
             
-            # Clone the repository
-            clone_url = project.ssh_url_to_repo if hasattr(project, 'ssh_url_to_repo') else project.http_url_to_repo
-            self.logger.info(f"Cloning {project.name} from {clone_url}")
+            # Clone the repository (prefer HTTPS over SSH)
+            if hasattr(project, 'http_url_to_repo'):
+                clone_url = project.http_url_to_repo
+                self.logger.info(f"Cloning {project.name} using HTTPS")
+            elif hasattr(project, 'ssh_url_to_repo'):
+                clone_url = project.ssh_url_to_repo
+                self.logger.info(f"Cloning {project.name} using SSH")
+            else:
+                self.logger.error(f"No clone URL available for {project.name}")
+                self.stats['errors'] += 1
+                return False
             
-            Repo.clone_from(clone_url, repo_path)
+            self.logger.info(f"Clone URL: {clone_url}")
+            
+            # Clone the repository
+            repo = Repo.clone_from(clone_url, repo_path)
             self.logger.info(f"Successfully cloned: {repo_path}")
+            
+            # Fetch all remote branches and create local tracking branches
+            if self._fetch_all_remote_branches(repo, project):
+                self.logger.info(f"All branches available locally for {project.name}")
+            else:
+                self.logger.warning(f"Some branches could not be fetched for {project.name}")
+            
             self.stats['repositories_cloned'] += 1
+            if self.progress_manager:
+                self.progress_manager.update()
             return True
             
         except GitCommandError as e:
+            error_msg = f"Git error: {str(e)[:100]}"
             self.logger.error(f"Git error cloning {project.name}: {e}")
+            if self.progress_manager:
+                self.progress_manager.record_error(project.name, "", error_msg)
             self.stats['errors'] += 1
+            if self.progress_manager:
+                self.progress_manager.update()
             return False
         except Exception as e:
+            error_msg = f"{str(e)[:100]}"
             self.logger.error(f"Error cloning {project.name}: {e}")
+            if self.progress_manager:
+                self.progress_manager.record_error(project.name, "", error_msg)
             self.stats['errors'] += 1
+            if self.progress_manager:
+                self.progress_manager.update()
             return False
     
     def process_group_items(self, group: Any, local_path: Path) -> List[Any]:
@@ -313,10 +432,17 @@ class GitLabCloner:
         # Create destination directory
         self.destination_path.mkdir(parents=True, exist_ok=True)
         
-        # Initialize queue for breadth-first processing
-        processing_queue = deque([(root_group, self.destination_path)])
+        # Count total repositories first
+        total_repos = self._count_total_repositories(root_group)
+        
+        # Initialize progress manager
+        self.progress_manager = ProgressManager(total_repos, quiet=self.quiet)
         
         self.logger.info(f"Starting recursive clone of group '{root_group.name}' to {self.destination_path}")
+        print(f"Cloning group '{root_group.name}' ({total_repos} repositories)...\n")
+        
+        # Initialize queue for breadth-first processing
+        processing_queue = deque([(root_group, self.destination_path)])
         
         # Process groups in breadth-first manner
         while processing_queue:
@@ -331,8 +457,11 @@ class GitLabCloner:
             # Add subgroups to processing queue
             processing_queue.extend(subgroups)
         
-        # Print final statistics
-        self._print_statistics()
+        # Close progress bar and print summary
+        if self.progress_manager:
+            self.progress_manager.close()
+            self.progress_manager.print_summary()
+        
         return True
     
     def _print_statistics(self):

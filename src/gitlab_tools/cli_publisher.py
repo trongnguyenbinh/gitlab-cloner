@@ -16,7 +16,8 @@ from .publisher import GitLabPublisher
 @click.option('--source', required=True, help='Local source path containing repositories')
 @click.option('--use-ssh', is_flag=True, help='Use SSH URLs instead of HTTPS (requires SSH keys)')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
-def main(gitlab_url: str, token: str, group_id: int, source: str, use_ssh: bool, verbose: bool):
+@click.option('--quiet', '-q', is_flag=True, help='Quiet mode - show only progress bar and errors')
+def main(gitlab_url: str, token: str, group_id: int, source: str, use_ssh: bool, verbose: bool, quiet: bool):
     """
     Publish local Git repositories to a GitLab group hierarchy.
     
@@ -28,7 +29,7 @@ def main(gitlab_url: str, token: str, group_id: int, source: str, use_ssh: bool,
     if verbose:
         logging.getLogger('gitlab_publisher').setLevel(logging.DEBUG)
     
-    publisher = GitLabPublisher(gitlab_url, token, source, use_ssh=use_ssh)
+    publisher = GitLabPublisher(gitlab_url, token, source, use_ssh=use_ssh, quiet=quiet)
     
     try:
         success = publisher.scan_and_publish(group_id)

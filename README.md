@@ -12,9 +12,10 @@ A suite of Python tools for managing GitLab repositories:
 - **Error Handling**: Robust error handling for API calls and git operations
 - **Progress Tracking**: Detailed logging and statistics reporting
 - **Smart Repository Management**: 
-  - Clones new repositories that don't exist locally
+  - Clones new repositories using HTTPS (no SSH setup required)
+  - Automatically fetches and creates local tracking branches for all remote branches during clone
   - Automatically updates existing repositories by fetching and pulling all remote branches
-  - Creates local tracking branches for any new remote branches
+  - Creates local tracking branches for any new remote branches discovered during updates
 - **Filesystem-Safe Naming**: Automatically sanitizes repository and group names to handle:
   - Trailing/leading whitespace
   - Invalid Windows characters (`<>:"|?*`)
@@ -116,7 +117,8 @@ python -m gitlab_tools.cli_cloner --gitlab-url <GITLAB_URL> --token <ACCESS_TOKE
 - `--token`: GitLab API access token for authentication
 - `--group`: Group ID (numeric) or group path (string) to start cloning from
 - `--destination`: Local destination path where repositories should be cloned
-- `--verbose`, `-v`: Enable verbose logging (optional)
+- `--verbose`, `-v`: Enable verbose logging (shows all details)
+- `--quiet`, `-q`: Quiet mode (shows only progress bar and errors at the end)
 
 #### Examples
 
@@ -152,7 +154,8 @@ python -m gitlab_tools.cli_publisher --gitlab-url <GITLAB_URL> --token <ACCESS_T
 - `--group-id`: Target parent group ID in GitLab where repositories will be created
 - `--source`: Local source path containing repositories to publish
 - `--use-ssh`: Use SSH URLs instead of HTTPS (requires SSH keys configured)
-- `--verbose`, `-v`: Enable verbose logging (optional)
+- `--verbose`, `-v`: Enable verbose logging (shows all details)
+- `--quiet`, `-q`: Quiet mode (shows only progress bar and errors at the end)
 
 **Note**: By default, the publisher uses HTTPS with token authentication (recommended). Only use `--use-ssh` if you have SSH keys configured with GitLab.
 
@@ -162,11 +165,14 @@ python -m gitlab_tools.cli_publisher --gitlab-url <GITLAB_URL> --token <ACCESS_T
 # Publish all repositories from a directory
 gitlab-publish --gitlab-url https://gitlab.company.com --token glpat-xxxxxxxxxxxxxxxxxxxx --group-id 456 --source ./my-repos
 
+# Publish with quiet mode (progress bar only)
+gitlab-publish --gitlab-url https://gitlab.company.com --token glpat-xxxxxxxxxxxxxxxxxxxx --group-id 456 --source ./my-repos --quiet
+
 # Migrate repositories from one GitLab to another
 # Step 1: Clone from source
-gitlab-clone --gitlab-url https://source.gitlab.com --token SOURCE_TOKEN --group 123 --destination ./temp-repos
+gitlab-clone --gitlab-url https://source.gitlab.com --token SOURCE_TOKEN --group 123 --destination ./temp-repos --quiet
 # Step 2: Publish to target
-gitlab-publish --gitlab-url https://target.gitlab.com --token TARGET_TOKEN --group-id 456 --source ./temp-repos
+gitlab-publish --gitlab-url https://target.gitlab.com --token TARGET_TOKEN --group-id 456 --source ./temp-repos --quiet
 ```
 
 ## How It Works
@@ -176,8 +182,11 @@ gitlab-publish --gitlab-url https://target.gitlab.com --token TARGET_TOKEN --gro
 1. **Authentication**: Connects to the GitLab API using the provided access token
 2. **Initial Group Scan**: Scans the specified group to identify repositories and subgroups
 3. **Repository Management**:
-   - For new repositories: Clones them to the appropriate directory
-   - For existing repositories: 
+   - For new repositories (clone): 
+     - Clones them to the appropriate directory
+     - Prefers HTTPS URLs over SSH (no SSH setup required)
+     - Automatically fetches all remote branches and creates local tracking branches
+   - For existing repositories (pull): 
      - Fetches all remote branches
      - Creates local tracking branches for new remote branches
      - Pulls the latest changes for all branches
@@ -317,6 +326,93 @@ publisher = GitLabPublisher(
 )
 publisher.scan_and_publish(456)
 ```
+
+## Output Modes
+
+### Default Mode (Normal Output)
+Shows all operations being performed:
+```
+INFO - Cloning my-project using HTTPS
+INFO - Fetching all remote branches for my-project
+INFO - Successfully cloned: /path/to/my-project
+```
+
+### Verbose Mode (`--verbose`)
+Shows even more detailed information including debug messages:
+```bash
+gitlab-clone --gitlab-url URL --token TOKEN --group 123 --destination ./repos --verbose
+```
+
+### Quiet Mode (`--quiet`)
+Shows only a progress bar and final error summary:
+```bash
+gitlab-clone --gitlab-url URL --token TOKEN --group 123 --destination ./repos --quiet
+```
+
+Output:
+```
+Cloning group 'my-group' (45 repositories)...
+
+Processing repositories |████████████████████████| 45/45 [100%]
+
+================================================================================
+PROCESSING COMPLETE: 45/45 repositories processed
+================================================================================
+
+✓ No errors encountered!
+```
+
+If errors occur:
+```
+✗ 3 ERROR(S) ENCOUNTERED:
+
+Repository: repo-name
+  • Git error: failed to fetch branch develop
+  • Failed to create branch hotfix/bug-123
+
+Repository: another-repo
+  • Connection timeout
+```
+
+## Detailed Behavior
+
+### When Cloning Repositories
+
+The cloner performs the following steps for each repository:
+
+1. Clone: Creates a local clone of the repository using HTTPS
+2. Fetch All Branches: Automatically fetches all remote branches from GitLab
+3. Create Local Branches: Creates local tracking branches for each remote branch found
+4. Status: Logs the number of branches created
+
+Example output:
+```
+2025-12-17 12:00:00,000 - gitlab_cloner - INFO - Cloning my-project using HTTPS
+2025-12-17 12:00:05,000 - gitlab_cloner - INFO - Fetching all remote branches for my-project
+2025-12-17 12:00:06,000 - gitlab_cloner - INFO - Found 8 remote branches
+2025-12-17 12:00:06,100 - gitlab_cloner - INFO - Creating local branch: develop
+2025-12-17 12:00:06,200 - gitlab_cloner - INFO - Creating local branch: feature/auth
+2025-12-17 12:00:06,300 - gitlab_cloner - INFO - Creating local branch: hotfix/bug-123
+2025-12-17 12:00:06,500 - gitlab_cloner - INFO - Successfully fetched all branches for my-project
+2025-12-17 12:00:06,500 - gitlab_cloner - INFO - All branches available locally for my-project
+```
+
+### When Updating Existing Repositories
+
+If a repository already exists locally, the cloner:
+
+1. Fetch: Fetches all updates from remote
+2. Update Branches: Pulls the latest changes for each existing local branch
+3. Create New Branches: Creates local tracking branches for any new remote branches
+4. Restore Position: Returns to the original branch after updating
+
+### Result
+
+After running the cloner, you have:
+- All repositories from the GitLab group hierarchy
+- All branches from each repository as local branches
+- No need for SSH key setup (HTTPS is used)
+- Complete access to all project history and branches
 
 ## Troubleshooting
 

@@ -17,11 +17,13 @@ import gitlab
 from git import Repo, GitCommandError
 import click
 
+from .progress import ProgressManager, ErrorRecord
+
 
 class GitLabPublisher:
     """Main class for publishing local repositories to GitLab."""
     
-    def __init__(self, gitlab_url: str, access_token: str, source_path: str, use_ssh: bool = False):
+    def __init__(self, gitlab_url: str, access_token: str, source_path: str, use_ssh: bool = False, quiet: bool = False):
         """
         Initialize the GitLab publisher.
         
@@ -30,17 +32,22 @@ class GitLabPublisher:
             access_token: GitLab API access token
             source_path: Local path containing repositories to publish
             use_ssh: Use SSH URLs instead of HTTPS (requires SSH keys configured)
+            quiet: If True, suppress detailed logging and show progress bar only
         """
         self.gitlab_url = gitlab_url.rstrip('/')
         self.access_token = access_token
         self.source_path = Path(source_path).resolve()
         self.use_ssh = use_ssh
+        self.quiet = quiet
         
         # Initialize GitLab connection
         self.gl = gitlab.Gitlab(self.gitlab_url, private_token=self.access_token)
         
         # Setup logging
         self.logger = self._setup_logging()
+        
+        # Progress manager (set later in scan_and_publish)
+        self.progress_manager: Optional[ProgressManager] = None
         
         # Statistics
         self.stats = {
@@ -57,11 +64,14 @@ class GitLabPublisher:
     def _setup_logging(self) -> logging.Logger:
         """Setup logging configuration."""
         logger = logging.getLogger('gitlab_publisher')
-        logger.setLevel(logging.INFO)
+        
+        # In quiet mode, only show WARNING and ERROR level logs
+        log_level = logging.WARNING if self.quiet else logging.INFO
+        logger.setLevel(log_level)
         
         # Create console handler
         handler = logging.StreamHandler()
-        handler.setLevel(logging.INFO)
+        handler.setLevel(log_level)
         
         # Create formatter
         formatter = logging.Formatter(
@@ -329,14 +339,23 @@ class GitLabPublisher:
             # Push all branches
             if self.push_all_branches(local_repo, remote_url, project_name):
                 self.stats['repositories_updated'] += 1
+                if self.progress_manager:
+                    self.progress_manager.update()
                 return True
             else:
                 self.stats['errors'] += 1
+                if self.progress_manager:
+                    self.progress_manager.update()
                 return False
                 
         except Exception as e:
+            error_msg = f"{str(e)[:100]}"
             self.logger.error(f"Error publishing repository {repo_path}: {e}")
+            if self.progress_manager:
+                self.progress_manager.record_error(str(repo_path.name), "", error_msg)
             self.stats['errors'] += 1
+            if self.progress_manager:
+                self.progress_manager.update()
             return False
     
     def scan_and_publish(self, target_group_id: int) -> bool:
@@ -378,7 +397,12 @@ class GitLabPublisher:
                 # Don't descend into git repositories
                 dirs[:] = []
         
-        self.logger.info(f"Found {len(repositories)} repositories to publish")
+        total_repos = len(repositories)
+        self.logger.info(f"Found {total_repos} repositories to publish")
+        
+        # Initialize progress manager
+        self.progress_manager = ProgressManager(total_repos, quiet=self.quiet)
+        print(f"Publishing {total_repos} repositories...\n")
         
         # Publish each repository
         for repo_path, relative_path in repositories:
@@ -387,8 +411,11 @@ class GitLabPublisher:
             # Small delay to be respectful to the server
             time.sleep(0.1)
         
-        # Print final statistics
-        self._print_statistics()
+        # Close progress bar and print summary
+        if self.progress_manager:
+            self.progress_manager.close()
+            self.progress_manager.print_summary()
+        
         return True
     
     def _print_statistics(self):

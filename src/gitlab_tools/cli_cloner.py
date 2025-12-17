@@ -15,7 +15,8 @@ from .cloner import GitLabCloner
 @click.option('--group', required=True, help='Group ID or group path to clone from')
 @click.option('--destination', required=True, help='Local destination path for cloned repositories')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
-def main(gitlab_url: str, token: str, group: str, destination: str, verbose: bool):
+@click.option('--quiet', '-q', is_flag=True, help='Quiet mode - show only progress bar and errors')
+def main(gitlab_url: str, token: str, group: str, destination: str, verbose: bool, quiet: bool):
     """
     Recursively clone all Git repositories from a GitLab group hierarchy.
     
@@ -25,7 +26,7 @@ def main(gitlab_url: str, token: str, group: str, destination: str, verbose: boo
     if verbose:
         logging.getLogger('gitlab_cloner').setLevel(logging.DEBUG)
     
-    cloner = GitLabCloner(gitlab_url, token, destination)
+    cloner = GitLabCloner(gitlab_url, token, destination, quiet=quiet)
     
     try:
         success = cloner.clone_group_recursively(group)
