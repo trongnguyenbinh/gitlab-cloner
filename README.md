@@ -20,14 +20,27 @@ A suite of Python tools for managing GitLab repositories:
   - Invalid Windows characters (`<>:"|?*`)
   - Trailing dots and spaces (Windows restrictions)
 
+## Requirements
+
+- **Python 3.13+** (tested with Python 3.13.9)
+- Git installed and accessible from command line
+- Network access to the GitLab server
+- Valid GitLab access token
+
 ## Installation
 
-1. Clone or download this project
-2. Install the required dependencies:
+1. Ensure Python 3.13 or higher is installed:
+   ```bash
+   python --version
+   # Should output: Python 3.13.x or higher
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+2. Clone or download this project
+
+3. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
@@ -172,12 +185,76 @@ The tool provides detailed logging including:
 - Error messages
 - Final statistics
 
-## Requirements
+## Common Use Cases
 
-- Python 3.7+
-- Git installed and accessible from command line
-- Network access to the GitLab server
-- Valid GitLab access token
+### 1. Backup GitLab Repositories
+```bash
+python gitlab_cloner.py \
+  --gitlab-url https://gitlab.company.com \
+  --token YOUR_TOKEN \
+  --group 123 \
+  --destination ./backup
+```
+
+### 2. Migrate Between GitLab Instances
+```bash
+# Step 1: Clone from source
+python gitlab_cloner.py \
+  --gitlab-url https://source.gitlab.com \
+  --token SOURCE_TOKEN \
+  --group 123 \
+  --destination ./migration-temp
+
+# Step 2: Publish to target
+python gitlab_publisher.py \
+  --gitlab-url https://target.gitlab.com \
+  --token TARGET_TOKEN \
+  --group-id 456 \
+  --source ./migration-temp
+```
+
+### 3. Regular Sync/Updates
+```bash
+# Run periodically to keep local copies up-to-date
+python gitlab_cloner.py \
+  --gitlab-url https://gitlab.company.com \
+  --token YOUR_TOKEN \
+  --group 123 \
+  --destination ./repos
+```
+
+### 4. Publish Local Projects to GitLab
+```bash
+python gitlab_publisher.py \
+  --gitlab-url https://gitlab.company.com \
+  --token YOUR_TOKEN \
+  --group-id 789 \
+  --source ./local-projects
+```
+
+## Troubleshooting
+
+### Cloner Issues
+
+**Problem**: Repository names with trailing spaces or invalid characters
+- **Solution**: Automatic sanitization is built-in, names are cleaned automatically
+
+**Problem**: "Repository already exists"
+- **Behavior**: The tool now automatically updates existing repositories with all branches
+
+### Publisher Issues
+
+**Problem**: "fatal: Could not read from remote repository"
+- **Cause**: Trying to use SSH without SSH keys configured
+- **Solution**: Don't use `--use-ssh` flag (HTTPS is the default and recommended)
+
+**Problem**: Authentication failed
+- **Check**: Token has `api` scope for publisher (not just `read_api`)
+- **Check**: Token is valid and not expired
+
+**Problem**: Push failed
+- **Check**: Token has `write_repository` scope
+- **Check**: You have permission to create projects in the target group
 
 ## Dependencies
 
@@ -185,3 +262,5 @@ The tool provides detailed logging including:
 - `python-gitlab`: Official GitLab API client
 - `gitpython`: Git operations in Python
 - `click`: Command-line interface framework
+
+All dependencies are listed in `requirements.txt` and installed automatically with `pip install -r requirements.txt`.
