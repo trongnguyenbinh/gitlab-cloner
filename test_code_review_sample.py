@@ -9,6 +9,8 @@ import os
 
 def calculate_average(numbers):
     # Calculate the average of a list of numbers
+    if not numbers:
+        raise ValueError("Cannot calculate average of an empty list")
     total = 0
     for num in numbers:
         total = total + num
@@ -65,6 +67,8 @@ def calculate_discount(price, discount_percent):
 
 
 def find_max_value(values):
+    if not values:
+        raise ValueError("Cannot find max value of an empty list")
     max_val = values[0]
     i = 0
     while i < len(values):
